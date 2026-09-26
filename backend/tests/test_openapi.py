@@ -9,7 +9,8 @@ PUBLIC = {
     ("/api/auth/login", "post"),
     ("/api/auth/forgot-password", "post"),
     ("/api/auth/reset-password", "post"),
-    ("/health", "get"),
+    ("/api/health", "get"),
+    ("/api/health/db", "get"),
 }
 
 # (path, method) -> status codes that must be documented (beyond 401/422).
@@ -68,6 +69,8 @@ def test_every_protected_operation_documents_401(paths: dict) -> None:
 
 def test_public_operations_do_not_document_401_unless_they_return_it(paths: dict) -> None:
     for path, method in PUBLIC - {("/api/auth/login", "post")}:
+        if path == "/api/health/db":
+            continue  # documented 503 only
         assert "401" not in paths[path][method]["responses"], (path, method)
 
 

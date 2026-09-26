@@ -70,3 +70,17 @@ def test_actual_request_carries_cors_header_for_allowed_origin() -> None:
     assert response.headers["access-control-allow-origin"] == ALLOWED
     other = client.get("/health", headers={"Origin": "http://evil.example.com"})
     assert "access-control-allow-origin" not in other.headers
+
+
+def test_cors_origin_regex_allows_preview_deployments() -> None:
+    settings = make_settings(cors_origin_regex=r"https://.*\.vercel\.app")
+    client = TestClient(create_app(settings))
+    ok = preflight(client, "https://stocksense-git-feature.vercel.app")
+    assert ok.headers["access-control-allow-origin"] == "https://stocksense-git-feature.vercel.app"
+    assert "access-control-allow-origin" not in preflight(client, "https://evil.example.com").headers
+    assert "access-control-allow-credentials" not in ok.headers
+
+
+def test_invalid_cors_origin_regex_rejected() -> None:
+    with pytest.raises(ValidationError, match="CORS_ORIGIN_REGEX"):
+        make_settings(cors_origin_regex="(unclosed")

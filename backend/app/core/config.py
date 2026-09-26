@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -21,7 +22,9 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "stocksense"
-    # Full URL override; takes precedence over the POSTGRES_* parts.
+    # Full URL override (DATABASE_URL); takes precedence over the POSTGRES_* parts.
+    # Hosted providers hand out postgres:// or postgresql://; both are normalized
+    # to the psycopg 3 driver (see normalize_database_url).
     database_url_override: str | None = Field(default=None, validation_alias="DATABASE_URL")
 
     # Required (no default). Set SECRET_KEY in the environment or .env.
@@ -29,6 +32,8 @@ class Settings(BaseSettings):
     # (e.g. CORS_ORIGINS=http://localhost:5173,https://app.example.com). Empty
     # (the default) disables CORS entirely; "*" is rejected.
     cors_origins: Annotated[list[str], NoDecode] = []
+    # Optional regex for preview deployments, e.g. https://.*\.vercel\.app
+    cors_origin_regex: str | None = None
 
     secret_key: str
     jwt_algorithm: str = "HS256"
@@ -49,6 +54,28 @@ class Settings(BaseSettings):
                     f"invalid CORS origin {origin!r}: use explicit http(s)://host[:port] origins"
                 )
         return origins
+
+    @field_validator("cors_origin_regex")
+    @classmethod
+    def valid_cors_origin_regex(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        try:
+            re.compile(value)
+        except re.error as exc:
+            raise ValueError(f"invalid CORS_ORIGIN_REGEX: {exc}") from None
+        return value
+
+    @field_validator("database_url_override")
+    @classmethod
+    def normalize_database_url(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        if value.startswith("postgres://"):
+            value = "postgresql://" + value[len("postgres://") :]
+        if value.startswith("postgresql://"):
+            value = "postgresql+psycopg://" + value[len("postgresql://") :]
+        return value
 
     @field_validator("secret_key")
     @classmethod
@@ -73,6 +100,11 @@ class Settings(BaseSettings):
             port=self.postgres_port,
             database=self.postgres_db,
         ).render_as_string(hide_password=False)
+
+    @property
+    def DATABASE_URL(self) -> str:  # noqa: N802 - name the develop scaffold used
+        """Alias of `database_url` kept so scaffold-style code keeps working."""
+        return self.database_url
 
 
 @lru_cache

@@ -6,6 +6,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 
+# The one declarative Base lives in app.models.base (with the naming convention
+# Alembic relies on). Re-exported here because the develop scaffold's convention
+# is `from app.core.database import Base`.
+from app.models.base import Base
+
+__all__ = ["Base", "get_db", "get_engine", "get_session_factory"]
+
 
 @lru_cache
 def get_engine() -> Engine:

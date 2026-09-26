@@ -46,3 +46,33 @@ def test_reset_token_logged_in_development(caplog: pytest.LogCaptureFixture) -> 
     with caplog.at_level(logging.DEBUG):
         deliver_password_reset(settings, "a@example.com", "SECRET-RESET-TOKEN")
     assert "SECRET-RESET-TOKEN" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("postgres://u:p@host:5432/db?sslmode=require", "postgresql+psycopg://u:p@host:5432/db?sslmode=require"),
+        ("postgresql://u:p@host/db", "postgresql+psycopg://u:p@host/db"),
+        ("postgresql+psycopg://u:p@host/db", "postgresql+psycopg://u:p@host/db"),
+        ("sqlite:///x.db", "sqlite:///x.db"),
+    ],
+)
+def test_database_url_is_normalized_for_hosted_providers(url: str, expected: str) -> None:
+    settings = Settings(_env_file=None, secret_key=GOOD_KEY, database_url_override=url)
+    assert settings.database_url == expected
+    assert settings.DATABASE_URL == expected  # scaffold-style alias
+
+
+def test_database_url_env_var_takes_precedence_over_postgres_parts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@hosted/db")
+    monkeypatch.setenv("POSTGRES_HOST", "ignored")
+    settings = Settings(_env_file=None, secret_key=GOOD_KEY)
+    assert settings.database_url == "postgresql+psycopg://u:p@hosted/db"
+
+
+def test_single_declarative_base_is_shared() -> None:
+    from app.core.database import Base as scaffold_base
+    from app.models import Base
+
+    assert scaffold_base is Base
+    assert "users" in Base.metadata.tables
