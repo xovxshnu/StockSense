@@ -557,6 +557,7 @@ def test_migration_0008_upgrade(sqlite_migration_db) -> None:
         }
 
     inspect_url(url, check)
+    command.upgrade(cfg, "head")  # `check` needs the database at head
     command.check(cfg)  # models and migrations agree
 
 
