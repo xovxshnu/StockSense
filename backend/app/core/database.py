@@ -1,30 +1,33 @@
+from collections.abc import Iterator
 from functools import lru_cache
 
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 
+# The one declarative Base lives in app.models.base (with the naming convention
+# Alembic relies on). Re-exported here because the develop scaffold's convention
+# is `from app.core.database import Base`.
+from app.models.base import Base
 
-class Base(DeclarativeBase):
-    """Declarative base; feature branches define models on this."""
+__all__ = ["Base", "get_db", "get_engine", "get_session_factory"]
 
 
 @lru_cache
 def get_engine() -> Engine:
-    url = get_settings().DATABASE_URL
-    if not url:
-        raise RuntimeError("DATABASE_URL is not set")
-    # Lazy: no connection is made until first use. pre_ping survives
-    # managed-DB idle disconnects (Neon/Supabase pause connections).
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(get_settings().database_url, pool_pre_ping=True)
 
 
-def get_db():
-    """FastAPI dependency yielding a session."""
-    session = sessionmaker(bind=get_engine(), autoflush=False)()
+@lru_cache
+def get_session_factory() -> sessionmaker[Session]:
+    return sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)
+
+
+def get_db() -> Iterator[Session]:
+    """FastAPI dependency yielding one session per request."""
+    db = get_session_factory()()
     try:
-        yield session
+        yield db
     finally:
-        session.close()
+        db.close()

@@ -1,27 +1,38 @@
+from logging.config import fileConfig
+
 from alembic import context
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, pool
 
 from app.core.config import get_settings
-from app.core.database import Base
-# Feature branches: import model modules here so autogenerate sees them.
+from app.models import Base
+
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
 
-def run_migrations_online():
-    url = get_settings().DATABASE_URL
-    if not url:
-        raise RuntimeError("DATABASE_URL is not set")
-    with create_engine(url).connect() as conn:
-        context.configure(connection=conn, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
-
-
-def run_migrations_offline():
-    context.configure(url=get_settings().DATABASE_URL, target_metadata=target_metadata, literal_binds=True)
+def run_migrations_offline() -> None:
+    context.configure(
+        url=get_settings().database_url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    engine = create_engine(get_settings().database_url, poolclass=pool.NullPool)
+    with engine.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata, compare_type=True
+        )
+        with context.begin_transaction():
+            context.run_migrations()
 
 
 if context.is_offline_mode():

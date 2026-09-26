@@ -10,3 +10,6 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
+      # Required: signs JWTs (>= 32 chars); the app refuses to start without it.
+      - key: SECRET_KEY
+        generateValue: true

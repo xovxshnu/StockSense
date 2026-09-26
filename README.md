@@ -6,7 +6,7 @@ Transaction-driven inventory system. See `StockSense_Technical_Blueprint_v1.md`.
 Browser -> React/Vite (frontend/) -> HTTPS REST -> FastAPI (backend/) -> PostgreSQL
 ```
 
-This is the shared scaffold only. Feature work lives on feature branches.
+The backend includes the master-data layer (auth, categories, products, warehouses, locations, contacts, reorder rules, reference sequences). Inventory Core and the operations are still to come.
 
 ## Layout
 
@@ -22,7 +22,9 @@ This is the shared scaffold only. Feature work lives on feature branches.
 |---|---|---|
 | `VITE_API_BASE_URL` | frontend (build time) | Backend base URL, e.g. `https://api.example.com` |
 | `DATABASE_URL` | backend | Managed Postgres URL. `postgres://` / `postgresql://` are normalized to `postgresql+psycopg://` |
-| `CORS_ORIGINS` | backend | Comma-separated allowed frontend origins |
+| `SECRET_KEY` | backend (required) | JWT signing key, at least 32 characters. The app will not start without it |
+| `ENVIRONMENT` | backend | `development`, `test` or `production` (default `production`) |
+| `CORS_ORIGINS` | backend | Comma-separated exact frontend origins (no `*`) |
 | `CORS_ORIGIN_REGEX` | backend (optional) | Regex for preview deployments, e.g. `https://.*\.vercel\.app` |
 
 Copy `frontend/.env.example` and `backend/.env.example` to `.env` (git-ignored). Never commit real values.
@@ -34,7 +36,8 @@ Backend (Python 3.12+):
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # set DATABASE_URL (e.g. a Neon/Supabase dev DB) and CORS_ORIGINS
+cp .env.example .env        # set SECRET_KEY, DATABASE_URL (or the POSTGRES_* parts) and CORS_ORIGINS
+alembic upgrade head        # create the schema (migrations 0001-0007)
 uvicorn app.main:app --reload --port 8000
 pytest
 ```
@@ -48,7 +51,9 @@ npm run dev                 # http://localhost:5173
 ```
 For `npm run dev` only, if `VITE_API_BASE_URL` is unset the client falls back to `http://localhost:8000`. Production builds never use that fallback. For local dev add `http://localhost:5173` to `CORS_ORIGINS`.
 
-Health endpoints: `GET /api/health` (liveness, no DB) and `GET /api/health/db` (checks the database, 503 if unreachable).
+Health endpoints: `GET /api/health` (liveness, no DB) and `GET /api/health/db` (checks the database, 503 if unreachable). The original `GET /health` is still served for compatibility.
+
+Interactive API docs: `http://localhost:8000/docs`.
 
 ## Production build
 
