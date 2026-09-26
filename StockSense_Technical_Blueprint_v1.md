@@ -1,0 +1,927 @@
+# StockSense --- Technical Blueprint v1.0
+
+## 1. Architecture
+
+StockSense uses a modular monolith:
+
+``` text
+React UI
+   |
+REST/JSON
+   |
+FastAPI API
+   |
+Service Layer
+   |
+Inventory Engine  <-- core
+   |
+PostgreSQL
+```
+
+**Golden rule:** Every stock-changing operation goes through the
+Inventory Engine. The engine updates current Stock and creates a Stock
+Movement.
+
+## 2. Core Domain Model
+
+``` text
+User
+ |
+ +-- Product
+ |     +-- Category
+ |     +-- ReorderRule
+ |
+ +-- Warehouse
+ |     +-- Location
+ |            +-- Stock
+ |
+ +-- Operations
+       +-- Receipt
+       |     +-- ReceiptLine
+       +-- Delivery
+       |     +-- DeliveryLine
+       +-- Transfer
+       |     +-- TransferLine
+       +-- Adjustment
+             +-- AdjustmentLine
+
+Receipt / Delivery / Transfer / Adjustment
+                 |
+                 v
+           StockMovement
+                 |
+                 v
+           Move History
+```
+
+## 3. Entities
+
+### User
+
+``` text
+id
+login_id UNIQUE
+email UNIQUE
+password_hash
+role
+created_at
+```
+
+### Product
+
+``` text
+id
+name
+sku UNIQUE
+category_id
+uom
+unit_cost
+reorder_level
+active
+created_at
+```
+
+### Category
+
+``` text
+id
+name
+```
+
+### Warehouse
+
+``` text
+id
+name
+short_code UNIQUE
+address
+active
+```
+
+### Location
+
+``` text
+id
+warehouse_id
+name
+short_code
+active
+```
+
+### Stock
+
+``` text
+id
+product_id
+location_id
+quantity
+reserved_quantity
+```
+
+Unique constraint: `(product_id, location_id)`
+
+`free_to_use = quantity - reserved_quantity`
+
+### Contact
+
+``` text
+id
+name
+type: supplier | customer
+address
+```
+
+### Receipt
+
+``` text
+id
+reference
+supplier_id
+warehouse_id
+destination_location_id
+schedule_date
+responsible_user_id
+status
+created_at
+updated_at
+```
+
+### ReceiptLine
+
+``` text
+id
+receipt_id
+product_id
+quantity
+```
+
+### Delivery
+
+``` text
+id
+reference
+customer_id
+warehouse_id
+source_location_id
+delivery_address
+schedule_date
+responsible_user_id
+status
+created_at
+updated_at
+```
+
+### DeliveryLine
+
+``` text
+id
+delivery_id
+product_id
+quantity
+```
+
+### Transfer
+
+``` text
+id
+reference
+from_location_id
+to_location_id
+schedule_date
+responsible_user_id
+status
+```
+
+### TransferLine
+
+``` text
+id
+transfer_id
+product_id
+quantity
+```
+
+### Adjustment
+
+``` text
+id
+reference
+location_id
+responsible_user_id
+reason
+status
+created_at
+```
+
+### AdjustmentLine
+
+``` text
+id
+adjustment_id
+product_id
+system_quantity
+counted_quantity
+difference
+```
+
+### StockMovement
+
+The audit/ledger entity.
+
+``` text
+id
+reference
+product_id
+movement_type
+from_location_id
+to_location_id
+quantity
+source_type
+source_id
+performed_by
+created_at
+```
+
+Movement types: `IN`, `OUT`, `TRANSFER`, `ADJUSTMENT`
+
+Move History is a view over StockMovement, not a second movement store.
+
+## 4. ER Relationship Map
+
+``` text
+Category 1 ---- N Product
+Product  1 ---- N Stock
+Warehouse 1 --- N Location
+Location 1 ---- N Stock
+
+Receipt 1 ----- N ReceiptLine
+Delivery 1 ---- N DeliveryLine
+Transfer 1 ---- N TransferLine
+Adjustment 1 -- N AdjustmentLine
+
+Product 1 ----- N ReceiptLine
+Product 1 ----- N DeliveryLine
+Product 1 ----- N TransferLine
+Product 1 ----- N AdjustmentLine
+Product 1 ----- N StockMovement
+
+User 1 -------- N Operations
+Contact 1 ----- N Receipt/Delivery
+Location 1 ---- N StockMovement (source)
+Location 1 ---- N StockMovement (destination)
+```
+
+## 5. State Machines
+
+### Receipt
+
+``` text
+DRAFT -> READY -> DONE
+  |       |
+  +-------+----> CANCELED
+```
+
+### Delivery
+
+``` text
+DRAFT -> WAITING -> READY -> DONE
+  |         |         |
+  +---------+---------+----> CANCELED
+```
+
+`WAITING` means requested stock is unavailable. When sufficient stock
+becomes available, it can become `READY`.
+
+### Transfer
+
+``` text
+DRAFT -> READY -> DONE
+  |       |
+  +-------+----> CANCELED
+```
+
+### Adjustment
+
+``` text
+DRAFT -> DONE
+```
+
+Statuses must be enums/state transitions, not arbitrary strings.
+
+## 6. Inventory Engine Rules
+
+### Receipt
+
+``` text
+for each line:
+    stock[destination, product] += quantity
+    create StockMovement(IN)
+```
+
+Example: 100 + 50 = 150.
+
+### Delivery
+
+``` text
+check free_to_use >= requested
+
+if insufficient:
+    status = WAITING
+    do not mutate stock
+
+if sufficient:
+    stock[source, product] -= quantity
+    create StockMovement(OUT)
+```
+
+### Transfer
+
+``` text
+check source stock
+source -= quantity
+destination += quantity
+create StockMovement(TRANSFER)
+```
+
+Total company stock remains unchanged.
+
+### Adjustment
+
+``` text
+difference = counted_quantity - system_quantity
+stock += difference
+create StockMovement(ADJUSTMENT)
+```
+
+A Stock-page "Update Stock" action should internally create an
+Adjustment rather than directly editing Stock.
+
+## 7. Reference Generation
+
+References are generated by the backend `SequenceService`, never by
+React.
+
+Examples:
+
+``` text
+WH/IN/0001
+WH/IN/0002
+WH/OUT/0001
+WH/OUT/0002
+WH/INT/0001
+WH/ADJ/0001
+```
+
+Operation prefixes are centralized.
+
+## 8. API Contract
+
+### Auth
+
+``` http
+POST /api/auth/signup
+POST /api/auth/login
+POST /api/auth/forgot-password
+POST /api/auth/reset-password
+GET  /api/auth/me
+```
+
+### Products
+
+``` http
+GET    /api/products
+POST   /api/products
+GET    /api/products/{id}
+PUT    /api/products/{id}
+DELETE /api/products/{id}
+```
+
+Search:
+
+``` http
+GET /api/products?search=SKU001
+```
+
+### Categories
+
+``` http
+GET  /api/categories
+POST /api/categories
+PUT  /api/categories/{id}
+```
+
+### Warehouses
+
+``` http
+GET  /api/warehouses
+POST /api/warehouses
+GET  /api/warehouses/{id}
+PUT  /api/warehouses/{id}
+```
+
+### Locations
+
+``` http
+GET  /api/locations
+POST /api/locations
+GET  /api/locations/{id}
+PUT  /api/locations/{id}
+```
+
+### Stock
+
+``` http
+GET /api/stock
+GET /api/stock/{product_id}
+```
+
+Filters: warehouse, location, category, SKU, low_stock, out_of_stock.
+
+### Receipts
+
+``` http
+GET  /api/receipts
+POST /api/receipts
+GET  /api/receipts/{id}
+PUT  /api/receipts/{id}
+POST /api/receipts/{id}/todo
+POST /api/receipts/{id}/validate
+POST /api/receipts/{id}/cancel
+```
+
+### Deliveries
+
+``` http
+GET  /api/deliveries
+POST /api/deliveries
+GET  /api/deliveries/{id}
+PUT  /api/deliveries/{id}
+POST /api/deliveries/{id}/todo
+POST /api/deliveries/{id}/validate
+POST /api/deliveries/{id}/cancel
+```
+
+### Transfers
+
+``` http
+GET  /api/transfers
+POST /api/transfers
+GET  /api/transfers/{id}
+PUT  /api/transfers/{id}
+POST /api/transfers/{id}/validate
+POST /api/transfers/{id}/cancel
+```
+
+### Adjustments
+
+``` http
+GET  /api/adjustments
+POST /api/adjustments
+GET  /api/adjustments/{id}
+PUT  /api/adjustments/{id}
+POST /api/adjustments/{id}/validate
+```
+
+### Move History
+
+``` http
+GET /api/movements
+```
+
+Filters can include product, movement type, reference, source location
+and destination location.
+
+### Dashboard
+
+``` http
+GET /api/dashboard
+```
+
+Conceptual response:
+
+``` json
+{
+  "inventory": {"total_products": 120, "low_stock": 8, "out_of_stock": 3},
+  "receipts": {"pending": 4, "late": 1, "operations": 6},
+  "deliveries": {"pending": 4, "waiting": 2, "late": 1, "operations": 6},
+  "transfers": {"scheduled": 3}
+}
+```
+
+## 9. Frontend Architecture
+
+``` text
+src/
+├── pages/
+│   ├── Login/
+│   ├── Signup/
+│   ├── Dashboard/
+│   ├── Products/
+│   ├── Stock/
+│   ├── Receipts/
+│   ├── Deliveries/
+│   ├── Transfers/
+│   ├── Adjustments/
+│   ├── MoveHistory/
+│   ├── Warehouse/
+│   ├── Locations/
+│   └── Profile/
+├── components/
+│   ├── Sidebar/
+│   ├── Header/
+│   ├── DataTable/
+│   ├── Kanban/
+│   ├── FilterBar/
+│   ├── SearchBar/
+│   ├── StatusBadge/
+│   ├── KPICard/
+│   ├── ProductSelector/
+│   └── ConfirmDialog/
+├── services/
+│   └── api.js
+├── store/
+│   ├── authStore.js
+│   └── inventoryStore.js
+└── routes/
+    └── AppRoutes.jsx
+```
+
+Navigation:
+
+``` text
+Dashboard
+Products
+Operations
+  - Receipts
+  - Deliveries
+  - Transfers
+  - Adjustments
+Stock
+Move History
+Settings
+  - Warehouse
+  - Locations
+Profile
+  - My Profile
+  - Logout
+```
+
+Receipts and Deliveries should support List View and Kanban View.
+
+## 10. Dashboard
+
+Dashboard is calculated from real database state.
+
+``` text
+Inventory
+  Total Products
+  Low Stock
+  Out of Stock
+
+Receipts
+  Pending
+  Late
+  Operations
+
+Deliveries
+  Pending
+  Waiting
+  Late
+  Operations
+
+Transfers
+  Scheduled
+```
+
+Filters:
+
+``` text
+Document Type
+Status
+Warehouse
+Location
+Category
+```
+
+## 11. Search and Filters
+
+Reusable filter model:
+
+``` text
+document_type:
+  receipt
+  delivery
+  transfer
+  adjustment
+
+status:
+  draft
+  waiting
+  ready
+  done
+  canceled
+
+warehouse_id
+location_id
+category_id
+search
+```
+
+## 12. Backend Structure
+
+``` text
+backend/
+├── app/
+│   ├── main.py
+│   ├── core/
+│   │   ├── config.py
+│   │   ├── security.py
+│   │   └── database.py
+│   ├── models/
+│   ├── schemas/
+│   ├── services/
+│   ├── api/
+│   └── utils/
+├── tests/
+├── alembic/
+├── requirements.txt
+└── .env
+```
+
+Services:
+
+``` text
+auth_service
+product_service
+warehouse_service
+receipt_service
+delivery_service
+transfer_service
+adjustment_service
+inventory_service
+movement_service
+dashboard_service
+sequence_service
+```
+
+## 13. Service Dependency
+
+``` text
+ReceiptService
+      |
+      v
+InventoryService
+      |
+      +--> Stock
+      +--> StockMovement
+
+DeliveryService
+      |
+      v
+InventoryService
+      |
+      +--> Stock
+      +--> StockMovement
+
+TransferService
+      |
+      v
+InventoryService
+      |
+      +--> Stock
+      +--> StockMovement
+
+AdjustmentService
+      |
+      v
+InventoryService
+      |
+      +--> Stock
+      +--> StockMovement
+```
+
+## 14. Core Completion Test
+
+The team must be able to execute:
+
+``` text
+Create Product
+  -> Create Warehouse
+  -> Create Locations
+  -> Receive 100
+  -> Stock = 100
+  -> Transfer 30
+  -> Location A = 70
+  -> Location B = 30
+  -> Deliver 20
+  -> Location B = 10
+  -> Adjust -3
+  -> Location B = 7
+  -> Open Move History
+  -> See IN +100, TRANSFER 30, OUT 20, ADJUSTMENT -3
+  -> Dashboard reflects current state
+```
+
+If this passes, the inventory core is complete.
+
+## 15. Development Order
+
+### Phase 1 --- Contract
+
+``` text
+Architecture
+Database schema
+Class model
+API contract
+Workflow rules
+Status enums
+```
+
+### Phase 2 --- Foundation
+
+``` text
+GitHub
+FastAPI
+React
+PostgreSQL
+Migrations
+Environment configuration
+```
+
+### Phase 3 --- Master Data
+
+``` text
+Auth
+Users
+Products
+Categories
+Warehouses
+Locations
+Contacts
+```
+
+### Phase 4 --- Inventory Core
+
+``` text
+Stock
+StockMovement
+InventoryEngine
+```
+
+### Phase 5 --- Operations
+
+``` text
+Receipts
+Deliveries
+Transfers
+Adjustments
+```
+
+### Phase 6 --- UI
+
+``` text
+Dashboard
+Stock
+Move History
+Search
+Filters
+List
+Kanban
+Alerts
+```
+
+### Phase 7 --- Polish
+
+``` text
+Validation
+Error states
+Loading states
+Empty states
+Print
+Responsive UI
+Demo data
+```
+
+## 16. Git Strategy
+
+``` text
+main
+  |
+develop
+  |
+  +-- feature/auth
+  +-- feature/master-data
+  +-- feature/inventory-core
+  +-- feature/receipts
+  +-- feature/deliveries
+  +-- feature/transfers
+  +-- feature/adjustments
+  +-- feature/dashboard
+  +-- feature/frontend-ui
+```
+
+Rules: 1. Never push directly to `main`. 2. One feature per branch. 3.
+Pull before starting work. 4. Small commits. 5. Pull Request -\> review
+-\> merge. 6. Backend API contract is the frontend integration contract.
+7. Inventory Engine has one owner. 8. Run tests before merging.
+
+## 17. Suggested 5-Person Team Split
+
+### Member 1 --- Inventory Core
+
+Stock, StockMovement, InventoryEngine, and operation business logic.
+
+### Member 2 --- Backend Master Data
+
+Auth, User, Product, Category, Warehouse, Location, Contact,
+SequenceService, migrations.
+
+### Member 3 --- Frontend Operations
+
+Receipts, Deliveries, Transfers, Adjustments, forms, list and Kanban
+views.
+
+### Member 4 --- Frontend Intelligence
+
+Dashboard, Stock, Move History, search, filters, alerts, KPI cards.
+
+### Member 5 --- Integration / QA
+
+Routing, app shell, API integration, authentication integration,
+testing, integration, bug fixing, responsive UI, demo preparation.
+
+## 18. Core vs Add-ons
+
+### Core
+
+``` text
+Authentication
+Product
+Category
+Warehouse
+Location
+Stock
+Receipt
+Delivery
+Transfer
+Adjustment
+Stock Movement
+Move History
+Dashboard
+Search
+Filters
+Status workflows
+Low-stock detection
+Multi-location stock
+```
+
+### Add-ons / Polish
+
+``` text
+Advanced analytics
+Forecasting
+AI recommendations
+Barcode scanning
+Import/export
+Advanced notifications
+Advanced reporting
+Other automation
+```
+
+Do not start add-ons until the complete core flow works.
+
+## 19. Architecture Freeze Checklist
+
+``` text
+[ ] PostgreSQL
+[ ] FastAPI
+[ ] React
+[ ] Modular monolith
+[ ] Location-specific stock
+[ ] StockMovement is the audit ledger
+[ ] Move History reads StockMovement
+[ ] InventoryEngine owns stock mutations
+[ ] Operations use line items
+[ ] Backend generates references
+[ ] Statuses are enums/state transitions
+[ ] Stock-page edits become Adjustments
+[ ] Dashboard aggregates database state
+[ ] No direct stock manipulation from UI
+[ ] No microservices for MVP
+```
+
+## 20. Final Principle
+
+> StockSense is a transaction-driven inventory system: Receipts add
+> stock, Deliveries remove stock, Transfers move stock between
+> locations, Adjustments reconcile physical stock, and every stock
+> change is recorded as a Stock Movement.
+
+### Source alignment
+
+The problem statement requires a centralized real-time inventory system,
+product/location stock, receipts, deliveries, internal transfers,
+adjustments, alerts, multi-warehouse support, SKU search, filters, and
+stock-ledger tracking. The class/object and UI blueprint above
+incorporates those requirements and the supplied Excalidraw workflow/UI
+specification.
