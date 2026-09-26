@@ -277,9 +277,14 @@ def test_concurrent_adjustments_and_deliveries(pg: Session, refs) -> None:
 
     assert run_concurrently(pg.get_bind(), work) == []
     pg.expire_all()
-    assert {delivery_service.get_delivery(pg, d.id).status for d in deliveries} <= {
-        DeliveryStatus.DONE, DeliveryStatus.WAITING
-    }
+    for delivery in deliveries:
+        # A short delivery becomes WAITING, and a later positive adjustment may
+        # promote it back to READY; either way only a DONE delivery moved stock.
+        status = delivery_service.get_delivery(pg, delivery.id).status
+        assert status in {DeliveryStatus.DONE, DeliveryStatus.WAITING, DeliveryStatus.READY}
+        outs = pg.scalars(select(StockMovement).where(
+            StockMovement.source_type == "delivery", StockMovement.source_id == delivery.id)).all()
+        assert len(outs) == (1 if status is DeliveryStatus.DONE else 0)
     movements = {m.source_id: m for m in pg.scalars(select(StockMovement).where(
         StockMovement.movement_type == MovementType.ADJUSTMENT))}
     for adjustment in adjustments:
