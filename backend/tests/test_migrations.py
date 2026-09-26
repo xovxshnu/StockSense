@@ -56,7 +56,7 @@ def test_upgrade_check_downgrade_upgrade_round_trip(alembic_cfg) -> None:
     cfg, url = alembic_cfg
     expected = {
         "users", "categories", "products", "warehouses", "locations",
-        "contacts", "reorder_rules", "document_sequences",
+        "contacts", "reorder_rules", "document_sequences", "stock", "stock_movements",
     }
 
     command.upgrade(cfg, "head")

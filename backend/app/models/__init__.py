@@ -7,6 +7,8 @@ from app.models.document_sequence import DocumentSequence
 from app.models.location import Location
 from app.models.product import Product
 from app.models.reorder_rule import ReorderRule
+from app.models.stock import Stock
+from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User, UserRole
 from app.models.warehouse import Warehouse
 
@@ -17,8 +19,11 @@ __all__ = [
     "ContactType",
     "DocumentSequence",
     "Location",
+    "MovementType",
     "Product",
     "ReorderRule",
+    "Stock",
+    "StockMovement",
     "User",
     "UserRole",
     "Warehouse",
