@@ -58,6 +58,7 @@ def test_upgrade_check_downgrade_upgrade_round_trip(alembic_cfg) -> None:
         "users", "categories", "products", "warehouses", "locations",
         "contacts", "reorder_rules", "document_sequences", "stock", "stock_movements",
         "receipts", "receipt_lines", "deliveries", "delivery_lines",
+        "transfers", "transfer_lines", "adjustments", "adjustment_lines",
     }
 
     command.upgrade(cfg, "head")
